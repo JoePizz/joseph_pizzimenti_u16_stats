@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hockey Stats Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-white">
+  <div id="root"></div>
+
+  <script>
+    const { useState, useEffect, useMemo } = React;
+
+    function HockeyStatsDashboard() {
+      const [data, setData] = useState([]);
+      const [currentPage, setCurrentPage] = useState('scoring');
+      const [selectedTeams, setSelectedTeams] = useState([]);
+      const [selectedStrengths, setSelectedStrengths] = useState([]);
+      const [selectedGames, setSelectedGames] = useState([]);
+      const [selectedGameTypes, setSelectedGameTypes] = useState([]);
+      const [selectedPositions, setSelectedPositions] = useState([]);
+      const [metricView, setMetricView] = useState('total'); // 'total' or 'perGame'
+      const [sortColumn, setSortColumn] = useState('playerName');
+      const [sortAsc, setSortAsc] = useState(true);
+      const [teamFiltersOpen, setTeamFiltersOpen] = useState(false);
+      const [strengthFiltersOpen, setStrengthFiltersOpen] = useState(false);
+      const [gameFiltersOpen, setGameFiltersOpen] = useState(false);
+      const [gameTypeFiltersOpen, setGameTypeFiltersOpen] = useState(false);
+      const [positionFiltersOpen, setPositionFiltersOpen] = useState(false);
+
+      // Load CSV data
+      useEffect(() => {
+        const loadData = async () => {
+          try {
+            const response = await fetch('Kings vs Marlies - AllGames_Copy.csv');
+            if (!response.ok) throw new Error('CSV not found on server');
+            const csv = await response.text();
+            parseCSV(csv);
+          } catch (error) {
+            console.log('Server CSV not found, using upload option');
+          }
+        };
+        loadData();
+      }, []);
+
+      const parseCSV = (csv) => {
+        const lines = csv.trim().split('\n');
+        const headers = lines[0].split(',').map(h => h.trim());
+        const rows = lines.slice(1).map(line => {
+          const values = line.split(',').map(v => v.trim());
+          const obj = {};
+          headers.forEach((header, i) => {
+            obj[header] = values[i] || '';
+          });
+          return obj;
+        });
+        setData(rows);
+      };
+
+      const handleFileUpload = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            parseCSV(event.target.result);
+          };
+          reader.readAsText(file);
+        }
+      };
+
+      // Get unique values for filters
+      const teams = useMemo(() => {
+        const teamSet = new Set();
+        data.forEach(row => {
+          const team = row.Team ? row.Team.trim() : '';
+          if (team) teamSet.add(team);
+        });
+        return Array.from(teamSet).sort();
+      }, [data]);
+
+      const strengths = useMemo(() => {
+        const strengthSet = new Set();
+        data.forEach(row => {
+          if (row.Strength) strengthSet.add(row.Strength);
+        });
+        return Array.from(strengthSet).sort();
+      }, [data]);
+
+      const games = useMemo(() => {
+        const gameSet = new Set();
+        data.forEach(row => {
+          if (row.Game) gameSet.add(row.Game);
+        });
+        return Array.from(gameSet).sort();
+      }, [data]);
+
+      const gameTypes = useMemo(() => {
+        const typeSet = new Set();
+        data.forEach(row => {
+          if (row['Game Type']) typeSet.add(row['Game Type']);
+        });
+        return Array.from(typeSet).sort();
+      }, [data]);
+
+      const positions = useMemo(() => {
+        const positionSet = new Set();
+        data.forEach(row => {
+          if (row.Position) positionSet.add(row.Position);
+        });
+        return Array.from(positionSet).sort();
+      }, [data]);
+
+      // Filter data
+      const filteredData = useMemo(() => {
+        return data.filter(row => {
+          const teamMatch = selectedTeams.length === 0 || selectedTeams.includes((row.Team || '').trim());
+          const strengthMatch = selectedStrengths.length === 0 || selectedStrengths.includes(row.Strength);
+          const gameMatch = selectedGames.length === 0 || selectedGames.includes(row.Game);
+          const gameTypeMatch = selectedGameTypes.length === 0 || selectedGameTypes.includes(row['Game Type']);
+          const positionMatch = selectedPositions.length === 0 || selectedPositions.includes(row.Position);
+          return teamMatch && strengthMatch && gameMatch && gameTypeMatch && positionMatch;
+        });
+      }, [data, selectedTeams, selectedStrengths, selectedGames, selectedGameTypes, selectedPositions]);
+
+      // Calculate team games from ALL data (before position filter) for accurate GP
+      const teamGamesAll = useMemo(() => {
+        const tgAll = {};
+        data.forEach(row => {
+          const team = (row.Team || '').trim();
+          const game = row.Game;
+          
+          if (!tgAll[team]) {
+            tgAll[team] = new Set();
+          }
+          
+          if (game) {
+            tgAll[team].add(game);
+          }
+        });
+        return tgAll;
+      }, [data]);
+
+      // Aggregate player stats
+      const playerStats = useMemo(() => {
+        const stats = {};
+        
+        // Step 2: Aggregate stats from filtered data only
+        filteredData.forEach(row => {
+          // Skip rows with no player number (team shots, own goals, etc.)
+          if (!row.Number || row.Number.trim() === '') {
+            return;
+          }
+          
+          const key = `${(row.Team || '').trim()}|${row['Player Name']}|${row.Number}|${row.Position || ''}`;
+          if (!stats[key]) {
+            stats[key] = {
+              team: (row.Team || '').trim(),
+              playerName: row['Player Name'],
+              number: row.Number,
+              position: row.Position || 'N/A',
+              gamesPlayed: 0,
+              goals: 0,
+              assists: 0,
+              shotChances: 0,
+              passChances: 0,
+              missPostChances: 0,
+              controlledEntries: 0,
+              carriedEntries: 0,
+              passEntries: 0,
+              dumps: 0,
+              totalShotsOnGoal: 0,
+              highDangerShots: 0,
+              medDangerShots: 0,
+              highDangerMissPost: 0,
+              medDangerMissPost: 0,
+              missedShots: 0,
+              blockedShots: 0,
+              reboundsCreated: 0,
+              shotAttBlocked: 0,
+              highDangerPasses: 0,
+              medDangerPasses: 0,
+              totalShotAttempts: 0
+            };
+          }
+
+          // Goals and Scoring
+          if (row.ACTION === 'GOAL') stats[key].goals++;
+          if (row.ACTION === 'ASSIST') stats[key].assists++;
+          
+          // Shot chances (S or GOAL with HD/MD)
+          if ((row.ACTION === 'S' || row.ACTION === 'GOAL') && (row.Danger === 'HD' || row.Danger === 'MD')) {
+            stats[key].shotChances++;
+          }
+          
+          // Pass chances (P or ASSIST with HD/MD)
+          if ((row.ACTION === 'P' || row.ACTION === 'ASSIST') && (row.Danger === 'HD' || row.Danger === 'MD')) {
+            stats[key].passChances++;
+          }
+          
+          // Miss/Post chances (M or POST with HD/MD)
+          if ((row.ACTION === 'M' || row.ACTION === 'POST') && (row.Danger === 'HD' || row.Danger === 'MD')) {
+            stats[key].missPostChances++;
+          }
+
+          // Entries
+          if (row.ACTION === 'CE') stats[key].carriedEntries++;
+          if (row.ACTION === 'PE') stats[key].passEntries++;
+          if ((row.ACTION === 'CE' || row.ACTION === 'PE') && row.Strength === 'EV') stats[key].controlledEntries++;
+          if (row.ACTION === 'D') stats[key].dumps++;
+
+          // Shooting details - all dangers (LD, MD, HD)
+          if (row.ACTION === 'S' || row.ACTION === 'GOAL') {
+            stats[key].totalShotsOnGoal++;
+            if (row.Danger === 'HD') stats[key].highDangerShots++;
+            if (row.Danger === 'MD') stats[key].medDangerShots++;
+          }
+          if ((row.ACTION === 'M' || row.ACTION === 'POST') && row.Danger === 'HD') stats[key].highDangerMissPost++;
+          if ((row.ACTION === 'M' || row.ACTION === 'POST') && row.Danger === 'MD') stats[key].medDangerMissPost++;
+          if (row.ACTION === 'M') stats[key].missedShots++;
+          if (row.ACTION === 'B') stats[key].blockedShots++;
+          
+          // Rebounds: ACTION = 'S' with Danger = 'LD' AND Notes equals 'REB'
+          if (row.ACTION === 'S' && row.Danger === 'LD' && row.Notes && row.Notes.trim() === 'REB') {
+            stats[key].reboundsCreated++;
+          }
+          
+          // Total shot attempts: S, B, M, POST, GOAL at any danger level
+          if (row.ACTION === 'S' || row.ACTION === 'B' || row.ACTION === 'M' || row.ACTION === 'POST' || row.ACTION === 'GOAL') {
+            stats[key].totalShotAttempts++;
+          }
+
+          // Passing details
+          if ((row.ACTION === 'P' || row.ACTION === 'ASSIST') && row.Danger === 'HD') stats[key].highDangerPasses++;
+          if ((row.ACTION === 'P' || row.ACTION === 'ASSIST') && row.Danger === 'MD') stats[key].medDangerPasses++;
+        });
+
+        let result = Object.values(stats).map(player => ({
+          ...player,
+          gamesPlayed: teamGamesAll[player.team]?.size || 0
+        }));
+
+        // Calculate totals and percentages (before per-game division)
+        result.forEach(p => {
+          // Scoring tab totals
+          p.points = p.goals + p.assists;
+          p.totalChances = p.shotChances + p.passChances + p.missPostChances;
+          
+          // Entries tab totals
+          // Total Controlled Entries = Carried Entries + Pass Entries
+          p.totalControlledEntries = p.carriedEntries + p.passEntries;
+          
+          // Shooting tab totals
+          // Total Shot Chances = HD + MD shots only (Action = S or GOAL)
+          p.totalShotChances = p.highDangerShots + p.medDangerShots;
+          // Shot + Miss Chances = HD + MD shots and misses (Action = S or M or POST or GOAL)
+          p.shotPlusMissChances = p.highDangerShots + p.medDangerShots + p.highDangerMissPost + p.medDangerMissPost;
+          
+          // Passing tab totals
+          p.totalPassChances = p.highDangerPasses + p.medDangerPasses;
+          
+          // Shooting percentages
+          const totalAttempts = p.totalShotsOnGoal + p.missedShots + p.blockedShots;
+          p.shotsThroughPct = totalAttempts > 0 ? ((p.totalShotsOnGoal + p.missedShots) / totalAttempts * 100) : 0;
+          p.shotsOnGoalPct = totalAttempts > 0 ? (p.totalShotsOnGoal / totalAttempts * 100) : 0;
+        });
+
+        // Apply per-game division if selected
+        if (metricView === 'perGame') {
+          result = result.map(player => {
+            const gp = player.gamesPlayed || 1; // Avoid division by zero
+            return {
+              ...player,
+              goals: player.goals / gp,
+              assists: player.assists / gp,
+              points: player.points / gp,
+              shotChances: player.shotChances / gp,
+              passChances: player.passChances / gp,
+              missPostChances: player.missPostChances / gp,
+              totalChances: player.totalChances / gp,
+              controlledEntries: player.controlledEntries / gp,
+              totalControlledEntries: player.totalControlledEntries / gp,
+              carriedEntries: player.carriedEntries / gp,
+              passEntries: player.passEntries / gp,
+              dumps: player.dumps / gp,
+              totalShotsOnGoal: player.totalShotsOnGoal / gp,
+              highDangerShots: player.highDangerShots / gp,
+              medDangerShots: player.medDangerShots / gp,
+              highDangerMissPost: player.highDangerMissPost / gp,
+              medDangerMissPost: player.medDangerMissPost / gp,
+              totalShotChances: player.totalShotChances / gp,
+              shotPlusMissChances: player.shotPlusMissChances / gp,
+              missedShots: player.missedShots / gp,
+              blockedShots: player.blockedShots / gp,
+              reboundsCreated: player.reboundsCreated / gp,
+              shotAttBlocked: player.shotAttBlocked / gp,
+              highDangerPasses: player.highDangerPasses / gp,
+              medDangerPasses: player.medDangerPasses / gp,
+              totalPassChances: player.totalPassChances / gp,
+              totalShotAttempts: player.totalShotAttempts / gp
+            };
+          });
+        }
+
+        // Apply sorting
+        result.sort((a, b) => {
+          let aVal, bVal;
+          
+          if (sortColumn === 'playerName') {
+            aVal = a.playerName;
+            bVal = b.playerName;
+            return sortAsc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+          } else if (sortColumn === 'team') {
+            aVal = a.team;
+            bVal = b.team;
+            return sortAsc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+          } else {
+            aVal = a[sortColumn] || 0;
+            bVal = b[sortColumn] || 0;
+            return sortAsc ? aVal - bVal : bVal - aVal;
+          }
+        });
+
+        return result;
+      }, [filteredData, sortColumn, sortAsc, metricView, teamGamesAll]);
+
+      const renderTable = (columns) => {
+        return React.createElement('div', { className: 'overflow-x-auto' },
+          React.createElement('table', { className: 'w-full text-xs bg-slate-800 rounded-lg border border-slate-700' },
+            React.createElement('thead', null,
+              React.createElement('tr', { className: 'bg-slate-700/50 border-b border-slate-700' },
+                columns.map(col => {
+                  const alignClass = col.align === 'center' ? 'text-center' : col.align === 'right' ? 'text-right' : 'text-left';
+                  return React.createElement('th', 
+                    { 
+                      key: col.key,
+                      onClick: () => { setSortColumn(col.key); setSortAsc(sortColumn === col.key ? !sortAsc : true); },
+                      className: `px-2 py-2 ${alignClass} cursor-pointer hover:bg-slate-600 whitespace-nowrap`
+                    }, 
+                    `${col.label} ${sortColumn === col.key ? (sortAsc ? '↑' : '↓') : ''}`
+                  );
+                })
+              )
+            ),
+            React.createElement('tbody', null,
+              playerStats.length === 0 ? React.createElement('tr', null,
+                React.createElement('td', { colSpan: columns.length, className: 'px-4 py-8 text-center text-slate-400' }, 'No data available')
+              ) : playerStats.map((player, idx) => React.createElement('tr', { key: idx, className: 'border-b border-slate-700/50 hover:bg-slate-700/30' },
+                columns.map(col => {
+                  let value = player[col.key];
+                  let colorClass = '';
+                  
+                  if (col.color === 'yellow' && value > 0) colorClass = 'text-yellow-400 font-semibold';
+                  if (col.color === 'cyan' && value > 0) colorClass = 'text-cyan-400 font-semibold';
+                  if (col.color === 'green' && value > 0) colorClass = 'text-green-400 font-semibold';
+                  if (col.color === 'orange') colorClass = 'text-orange-400';
+                  if (col.color === 'blue') colorClass = 'text-blue-400 font-bold';
+                  
+                  const alignClass = col.align === 'center' ? 'text-center' : col.align === 'right' ? 'text-right' : 'text-left';
+                  
+                  let displayValue = value;
+                  if (col.format) {
+                    displayValue = col.format(value);
+                  } else if (metricView === 'perGame' && typeof value === 'number' && !['gamesPlayed', 'number'].includes(col.key)) {
+                    // Format per-game metrics to 2 decimal places
+                    displayValue = value.toFixed(2);
+                  }
+                  
+                  return React.createElement('td', { key: col.key, className: `px-2 py-2 ${alignClass} ${colorClass}` }, 
+                    displayValue
+                  );
+                })
+              ))
+            )
+          )
+        );
+      };
+
+      const renderFilters = () => {
+        return React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-6 gap-4 mb-8' },
+          // Team Filter
+          React.createElement('div', { className: 'relative' },
+            React.createElement('button', { onClick: () => setTeamFiltersOpen(!teamFiltersOpen), className: 'w-full text-left bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-white hover:bg-slate-600' },
+              React.createElement('span', null, selectedTeams.length === 0 ? 'Select Teams' : `${selectedTeams.length} selected`)
+            ),
+            teamFiltersOpen && React.createElement('div', { className: 'absolute top-full left-0 right-0 mt-2 bg-slate-700 border border-slate-600 rounded-lg z-10 p-3 max-h-48 overflow-y-auto' },
+              teams.map(team => React.createElement('label', { key: team, className: 'flex items-center gap-2 p-2 hover:bg-slate-600 rounded cursor-pointer' },
+                React.createElement('input', { type: 'checkbox', checked: selectedTeams.includes(team), onChange: () => setSelectedTeams(prev => prev.includes(team) ? prev.filter(t => t !== team) : [...prev, team]), className: 'w-4 h-4' }),
+                React.createElement('span', { className: 'text-sm' }, team)
+              ))
+            )
+          ),
+          // Game Type Filter
+          React.createElement('div', { className: 'relative' },
+            React.createElement('button', { onClick: () => setGameTypeFiltersOpen(!gameTypeFiltersOpen), className: 'w-full text-left bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-white hover:bg-slate-600' },
+              React.createElement('span', null, selectedGameTypes.length === 0 ? 'Select Game Type' : `${selectedGameTypes.length} selected`)
+            ),
+            gameTypeFiltersOpen && React.createElement('div', { className: 'absolute top-full left-0 right-0 mt-2 bg-slate-700 border border-slate-600 rounded-lg z-10 p-3 max-h-48 overflow-y-auto' },
+              gameTypes.map(gameType => React.createElement('label', { key: gameType, className: 'flex items-center gap-2 p-2 hover:bg-slate-600 rounded cursor-pointer' },
+                React.createElement('input', { type: 'checkbox', checked: selectedGameTypes.includes(gameType), onChange: () => setSelectedGameTypes(prev => prev.includes(gameType) ? prev.filter(g => g !== gameType) : [...prev, gameType]), className: 'w-4 h-4' }),
+                React.createElement('span', { className: 'text-sm' }, gameType)
+              ))
+            )
+          ),
+          // Game Filter
+          React.createElement('div', { className: 'relative' },
+            React.createElement('button', { onClick: () => setGameFiltersOpen(!gameFiltersOpen), className: 'w-full text-left bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-white hover:bg-slate-600' },
+              React.createElement('span', null, selectedGames.length === 0 ? 'Select Games' : `${selectedGames.length} selected`)
+            ),
+            gameFiltersOpen && React.createElement('div', { className: 'absolute top-full left-0 right-0 mt-2 bg-slate-700 border border-slate-600 rounded-lg z-10 p-3 max-h-48 overflow-y-auto' },
+              games.map(game => React.createElement('label', { key: game, className: 'flex items-center gap-2 p-2 hover:bg-slate-600 rounded cursor-pointer' },
+                React.createElement('input', { type: 'checkbox', checked: selectedGames.includes(game), onChange: () => setSelectedGames(prev => prev.includes(game) ? prev.filter(g => g !== game) : [...prev, game]), className: 'w-4 h-4' }),
+                React.createElement('span', { className: 'text-sm' }, game)
+              ))
+            )
+          ),
+          // Strength Filter
+          React.createElement('div', { className: 'relative' },
+            React.createElement('button', { onClick: () => setStrengthFiltersOpen(!strengthFiltersOpen), className: 'w-full text-left bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-white hover:bg-slate-600' },
+              React.createElement('span', null, selectedStrengths.length === 0 ? 'Select Strength' : `${selectedStrengths.length} selected`)
+            ),
+            strengthFiltersOpen && React.createElement('div', { className: 'absolute top-full left-0 right-0 mt-2 bg-slate-700 border border-slate-600 rounded-lg z-10 p-3' },
+              strengths.map(strength => React.createElement('label', { key: strength, className: 'flex items-center gap-2 p-2 hover:bg-slate-600 rounded cursor-pointer' },
+                React.createElement('input', { type: 'checkbox', checked: selectedStrengths.includes(strength), onChange: () => setSelectedStrengths(prev => prev.includes(strength) ? prev.filter(s => s !== strength) : [...prev, strength]), className: 'w-4 h-4' }),
+                React.createElement('span', { className: 'text-sm' }, strength)
+              ))
+            )
+          ),
+          // Position Filter
+          React.createElement('div', { className: 'relative' },
+            React.createElement('button', { onClick: () => setPositionFiltersOpen(!positionFiltersOpen), className: 'w-full text-left bg-slate-700 border border-slate-600 rounded-lg px-4 py-2 text-white hover:bg-slate-600' },
+              React.createElement('span', null, selectedPositions.length === 0 ? 'Select Position' : `${selectedPositions.length} selected`)
+            ),
+            positionFiltersOpen && React.createElement('div', { className: 'absolute top-full left-0 right-0 mt-2 bg-slate-700 border border-slate-600 rounded-lg z-10 p-3 max-h-48 overflow-y-auto' },
+              positions.map(position => React.createElement('label', { key: position, className: 'flex items-center gap-2 p-2 hover:bg-slate-600 rounded cursor-pointer' },
+                React.createElement('input', { type: 'checkbox', checked: selectedPositions.includes(position), onChange: () => setSelectedPositions(prev => prev.includes(position) ? prev.filter(p => p !== position) : [...prev, position]), className: 'w-4 h-4' }),
+                React.createElement('span', { className: 'text-sm' }, position)
+              ))
+            )
+          ),
+          // Total/Per Game Filter
+          React.createElement('div', { className: 'flex gap-2 bg-slate-700 border border-slate-600 rounded-lg p-2' },
+            React.createElement('button', 
+              { 
+                onClick: () => setMetricView('total'),
+                className: `flex-1 px-3 py-1 rounded transition ${metricView === 'total' ? 'bg-blue-600 text-white' : 'bg-slate-600 text-slate-300 hover:bg-slate-500'}`
+              },
+              'Total'
+            ),
+            React.createElement('button', 
+              { 
+                onClick: () => setMetricView('perGame'),
+                className: `flex-1 px-3 py-1 rounded transition ${metricView === 'perGame' ? 'bg-blue-600 text-white' : 'bg-slate-600 text-slate-300 hover:bg-slate-500'}`
+              },
+              'Per Game'
+            )
+          )
+        );
+      };
+
+      const scoringColumns = [
+        { key: 'team', label: 'Team', align: 'left' },
+        { key: 'playerName', label: 'Player Name', align: 'left' },
+        { key: 'number', label: 'Number', align: 'center', color: 'blue' },
+        { key: 'position', label: 'Position', align: 'left' },
+        { key: 'gamesPlayed', label: 'GP', align: 'center', color: 'orange' },
+        { key: 'goals', label: 'Goals', align: 'center', color: 'yellow' },
+        { key: 'assists', label: 'Assists', align: 'center', color: 'cyan' },
+        { key: 'points', label: 'Points', align: 'center', color: 'blue' },
+        { key: 'shotChances', label: 'Shot Chances', align: 'center' },
+        { key: 'passChances', label: 'Pass Chances', align: 'center' },
+        { key: 'missPostChances', label: 'Miss/Post', align: 'center' },
+        { key: 'totalChances', label: 'Total Chances', align: 'center' }
+      ];
+
+      const entriesColumns = [
+        { key: 'team', label: 'Team', align: 'left' },
+        { key: 'playerName', label: 'Player Name', align: 'left' },
+        { key: 'number', label: 'Number', align: 'center', color: 'blue' },
+        { key: 'position', label: 'Position', align: 'left' },
+        { key: 'gamesPlayed', label: 'GP', align: 'center', color: 'orange' },
+        { key: 'totalControlledEntries', label: 'Total Controlled Entries', align: 'center', color: 'green' },
+        { key: 'carriedEntries', label: 'Carried Entries', align: 'center', color: 'green' },
+        { key: 'passEntries', label: 'Pass Entries', align: 'center', color: 'green' },
+        { key: 'dumps', label: 'Dumps', align: 'center', color: 'green' }
+      ];
+
+      const shootingColumns = [
+        { key: 'team', label: 'Team', align: 'left' },
+        { key: 'playerName', label: 'Player Name', align: 'left' },
+        { key: 'number', label: 'Number', align: 'center', color: 'blue' },
+        { key: 'position', label: 'Position', align: 'left' },
+        { key: 'gamesPlayed', label: 'GP', align: 'center', color: 'orange' },
+        { key: 'goals', label: 'Goals', align: 'center', color: 'yellow' },
+        { key: 'totalShotsOnGoal', label: 'Total SOG', align: 'center' },
+        { key: 'highDangerShots', label: 'HD Shots', align: 'center' },
+        { key: 'medDangerShots', label: 'MD Shots', align: 'center' },
+        { key: 'totalShotChances', label: 'Total Shot Chances', align: 'center' },
+        { key: 'shotPlusMissChances', label: 'Shot + Miss Chances', align: 'center' },
+        { key: 'reboundsCreated', label: 'Rebounds', align: 'center' },
+        { key: 'shotsThroughPct', label: 'Through %', align: 'center', format: (v) => v ? v.toFixed(0) + '%' : '0%' },
+        { key: 'shotsOnGoalPct', label: 'SOG %', align: 'center', format: (v) => v ? v.toFixed(0) + '%' : '0%' }
+      ];
+
+      const passingColumns = [
+        { key: 'team', label: 'Team', align: 'left' },
+        { key: 'playerName', label: 'Player Name', align: 'left' },
+        { key: 'number', label: 'Number', align: 'center', color: 'blue' },
+        { key: 'position', label: 'Position', align: 'left' },
+        { key: 'gamesPlayed', label: 'GP', align: 'center', color: 'orange' },
+        { key: 'assists', label: 'Assists', align: 'center', color: 'cyan' },
+        { key: 'highDangerPasses', label: 'HD Passes', align: 'center' },
+        { key: 'medDangerPasses', label: 'MD Passes', align: 'center' },
+        { key: 'totalPassChances', label: 'Total Pass Chances', align: 'center' }
+      ];
+
+      return React.createElement('div', { className: 'min-h-screen bg-slate-900 p-8' },
+        React.createElement('div', { className: 'max-w-7xl mx-auto' },
+          // Header
+          React.createElement('div', { className: 'mb-8' },
+            React.createElement('h1', { className: 'text-4xl font-bold text-white mb-4' }, 'Hockey Stats Dashboard'),
+            React.createElement('label', { className: 'block mb-4' },
+              React.createElement('span', { className: 'text-sm text-slate-400 mr-3' }, 'Upload CSV:'),
+              React.createElement('input', { type: 'file', accept: '.csv', onChange: handleFileUpload, className: 'text-sm' })
+            )
+          ),
+
+          // Page Navigation
+          React.createElement('div', { className: 'flex gap-2 mb-8 border-b border-slate-700' },
+            ['scoring', 'entries', 'shooting', 'passing'].map(page => React.createElement('button',
+              {
+                key: page,
+                onClick: () => setCurrentPage(page),
+                className: `px-4 py-2 capitalize font-semibold transition ${
+                  currentPage === page
+                    ? 'border-b-2 border-blue-500 text-blue-400'
+                    : 'text-slate-400 hover:text-white'
+                }`
+              },
+              page
+            ))
+          ),
+
+          // Filters
+          renderFilters(),
+
+          // Tables
+          currentPage === 'scoring' && renderTable(scoringColumns),
+          currentPage === 'entries' && renderTable(entriesColumns),
+          currentPage === 'shooting' && renderTable(shootingColumns),
+          currentPage === 'passing' && renderTable(passingColumns)
+        )
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(HockeyStatsDashboard));
+  </script>
+</body>
+</html>
